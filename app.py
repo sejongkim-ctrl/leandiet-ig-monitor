@@ -16,7 +16,7 @@ from pathlib import Path
 import streamlit as st
 import streamlit.components.v1 as components
 
-from ig_graph_api import fetch_profile
+from ig_graph_api import fetch_profile, refresh_long_lived_token, load_env
 
 # ── 경로 설정 ─────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent
@@ -25,6 +25,30 @@ DATA_DIR = ASSETS_DIR / "data"
 CONFIG_FILE = ASSETS_DIR / "config.json"
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
+TOKEN_CACHE_FILE = ASSETS_DIR / "token_cache.json"
+
+
+def get_token_expiry() -> tuple[str | None, int | None]:
+    """(만료일 YYYY-MM-DD, 남은 일수) 반환."""
+    # 1순위: Streamlit Secrets의 IG_TOKEN_EXPIRES_AT
+    try:
+        val = st.secrets.get("IG_TOKEN_EXPIRES_AT", "")
+        if val:
+            d = datetime.strptime(val, "%Y-%m-%d")
+            return val, (d - datetime.now()).days
+    except Exception:
+        pass
+    # 2순위: 로컬 token_cache.json
+    if TOKEN_CACHE_FILE.exists():
+        try:
+            cache = json.loads(TOKEN_CACHE_FILE.read_text())
+            refreshed_at = datetime.fromisoformat(cache["refreshed_at"])
+            expires_in = cache.get("expires_in_seconds", 5184000)
+            expires_at = refreshed_at + timedelta(seconds=expires_in)
+            return expires_at.strftime("%Y-%m-%d"), (expires_at - datetime.now()).days
+        except Exception:
+            pass
+    return None, None
 
 
 def load_config() -> dict:
@@ -368,6 +392,45 @@ def main():
     div[data-testid="stSpinner"] { color: #E1306C; }
     </style>
     """, unsafe_allow_html=True)
+
+    # ── 사이드바: 토큰 관리 ──────────────────────────────────────
+    with st.sidebar:
+        st.markdown("### 토큰 관리")
+        expires_at, days_left = get_token_expiry()
+
+        if expires_at and days_left is not None:
+            if days_left < 14:
+                st.error(f"만료 임박\n\n`{expires_at}`\n\nD-**{days_left}**일")
+            elif days_left < 30:
+                st.warning(f"만료 예정\n\n`{expires_at}`\n\nD-{days_left}일")
+            else:
+                st.success(f"정상\n\n`{expires_at}`\n\nD-{days_left}일")
+        else:
+            st.info("만료일 미설정\n\nSecrets에 `IG_TOKEN_EXPIRES_AT` 추가 시 표시됩니다.")
+
+        st.markdown("---")
+
+        if st.button("토큰 갱신", type="primary", use_container_width=True):
+            with st.spinner("Instagram API 갱신 중..."):
+                try:
+                    env = load_env()
+                    current_token = env.get("IG_ACCESS_TOKEN", "")
+                    if not current_token:
+                        st.error("현재 토큰 없음. Secrets의 IG_ACCESS_TOKEN을 확인하세요.")
+                    else:
+                        new_token = refresh_long_lived_token(current_token)
+                        new_expiry = (datetime.now() + timedelta(days=60)).strftime("%Y-%m-%d")
+                        st.success(f"갱신 완료! 새 만료일: {new_expiry}")
+                        st.markdown("**① 새 토큰 복사:**")
+                        st.code(new_token, language=None)
+                        st.markdown("**② Streamlit Cloud → Settings → Secrets 에서 교체:**")
+                        st.code(
+                            f'IG_ACCESS_TOKEN = "{new_token}"\n'
+                            f'IG_TOKEN_EXPIRES_AT = "{new_expiry}"',
+                            language="toml",
+                        )
+                except Exception as e:
+                    st.error(f"갱신 실패: {e}")
 
     with st.spinner(""):
         try:
