@@ -1,0 +1,10 @@
+{
+  "targets": [
+    {
+      "username": "leandiet_official",
+      "label": "린다이어트",
+      "alert_threshold_pct": 5
+    }
+  ],
+  "poll_interval_seconds": 300
+}

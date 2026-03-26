@@ -1,0 +1,10 @@
+assets/.env
+assets/data/
+assets/sessions/
+assets/token_cache.json
+assets/streamlit.log
+assets/streamlit_error.log
+__pycache__/
+*.pyc
+.venv/
+.omc/
