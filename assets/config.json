@@ -6,5 +6,5 @@
       "alert_threshold_pct": 5
     }
   ],
-  "poll_interval_seconds": 300
+  "poll_interval_seconds": 30
 }
