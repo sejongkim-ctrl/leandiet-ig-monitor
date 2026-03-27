@@ -155,6 +155,8 @@ def render_dashboard(snapshots: list[dict]) -> None:
     selected = st.segmented_control(
         "기간", period_options, default=default_period, label_visibility="collapsed"
     )
+    if selected is None:
+        selected = default_period
     n = period_map.get(selected, len(snapshots))
     data = snapshots[-n:] if n < len(snapshots) else snapshots
 
@@ -651,20 +653,30 @@ def main():
                 except Exception as e:
                     st.error(f"갱신 실패: {e}")
 
-    with st.spinner(""):
+    # 프로필 데이터를 session_state에 캐싱 — 기간 버튼 클릭 등 위젯 재실행 시 재호출 방지
+    now = time.time()
+    cache_expired = (
+        "profile_fetched_at" not in st.session_state
+        or (now - st.session_state["profile_fetched_at"]) > refresh_interval
+    )
+    if cache_expired:
+        with st.spinner(""):
+            try:
+                profile = fetch_profile(target_username)
+                st.session_state["profile"] = profile
+                st.session_state["profile_fetched_at"] = now
+            except Exception as e:
+                st.error(f"오류: {e}")
+                time.sleep(30)
+                st.rerun()
+                return
+        # 스냅샷 저장 (클라우드에서는 재시작 시 초기화됨)
         try:
-            profile = fetch_profile(target_username)
-        except Exception as e:
-            st.error(f"오류: {e}")
-            time.sleep(30)
-            st.rerun()
-            return
-
-    # 스냅샷 저장 (클라우드에서는 재시작 시 초기화됨)
-    try:
-        save_snapshot(target_username, profile["follower_count"])
-    except Exception:
-        pass
+            save_snapshot(target_username, profile["follower_count"])
+        except Exception:
+            pass
+    else:
+        profile = st.session_state["profile"]
 
     yesterday_count = get_yesterday_count(target_username)
     trend = load_recent_snapshots(target_username, days=7)
