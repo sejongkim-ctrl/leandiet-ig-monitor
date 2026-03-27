@@ -134,16 +134,16 @@ def render_dashboard(snapshots: list[dict]) -> None:
     """일별 팔로워 증감 대시보드 섹션."""
     if len(snapshots) < 2:
         st.markdown("""
-        <div style="text-align:center; color:#444; font-size:13px; padding:40px 0; letter-spacing:1px;">
-            데이터가 쌓이면 추이 차트가 표시됩니다<br>
-            <span style="font-size:11px; color:#333;">내일부터 일별 증감을 확인할 수 있습니다</span>
+        <div style="text-align:center; color:#333; font-size:12px; padding:48px 0;
+                    border-top:1px solid #1a1a1a; margin-top:20px; letter-spacing:1px;">
+            내일부터 일별 증감 추이를 확인할 수 있습니다
         </div>
         """, unsafe_allow_html=True)
         return
 
     st.markdown("""
-    <div style="border-top: 1px solid #1a1a1a; margin: 20px 0 24px; padding-top: 24px;
-                text-align:center; font-size:10px; color:#333; letter-spacing:3px; text-transform:uppercase;">
+    <div style="border-top:1px solid #1a1a1a; margin:24px 0 28px; padding-top:28px;
+                text-align:center; font-size:9px; color:#555; letter-spacing:4px; text-transform:uppercase;">
         일별 팔로워 증감
     </div>
     """, unsafe_allow_html=True)
@@ -161,25 +161,46 @@ def render_dashboard(snapshots: list[dict]) -> None:
     df = pd.DataFrame(data)
     df["date_label"] = df["date"].str[5:]
 
-    # 요약 메트릭
+    # ── 요약 메트릭 (커스텀 HTML 카드) ────────────────────────────
     valid_changes = [r["net_change"] for r in data if r["net_change"] is not None]
     total_change = sum(valid_changes) if valid_changes else 0
     avg_change = round(total_change / len(valid_changes), 1) if valid_changes else 0
     best_day = max(data, key=lambda x: x["net_change"] if x["net_change"] is not None else float("-inf"))
-    best_label = f"{best_day['date'][5:]}  +{best_day['net_change']:,}" if best_day.get("net_change") else "—"
+    best_val = (
+        f"+{best_day['net_change']:,}" if best_day.get("net_change") is not None and best_day["net_change"] >= 0
+        else f"{best_day['net_change']:,}" if best_day.get("net_change") is not None
+        else "—"
+    )
+    best_date = best_day["date"][5:] if best_day.get("net_change") is not None else ""
 
-    col1, col2, col3 = st.columns(3)
-    sign = "+" if total_change >= 0 else ""
-    with col1:
-        st.metric("기간 총 증감", f"{sign}{total_change:,}명")
-    with col2:
-        sign2 = "+" if avg_change >= 0 else ""
-        st.metric("일평균 증감", f"{sign2}{avg_change:,}명")
-    with col3:
-        st.metric("최대 증감일", best_label)
+    t_color = "#2ecc71" if total_change >= 0 else "#e74c3c"
+    a_color = "#2ecc71" if avg_change >= 0 else "#e74c3c"
+    t_sign = "+" if total_change >= 0 else ""
+    a_sign = "+" if avg_change >= 0 else ""
 
-    # 추이 라인+영역 차트
+    st.markdown(f"""
+    <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:28px;">
+      <div style="background:#111; border:1px solid #1e1e1e; border-radius:12px; padding:20px 12px; text-align:center;">
+        <div style="font-size:9px; color:#444; letter-spacing:2px; text-transform:uppercase; margin-bottom:12px;">기간 총 증감</div>
+        <div style="font-size:28px; font-weight:700; color:{t_color}; letter-spacing:-1px; line-height:1;">{t_sign}{total_change:,}</div>
+        <div style="font-size:10px; color:#333; margin-top:5px;">명</div>
+      </div>
+      <div style="background:#111; border:1px solid #1e1e1e; border-radius:12px; padding:20px 12px; text-align:center;">
+        <div style="font-size:9px; color:#444; letter-spacing:2px; text-transform:uppercase; margin-bottom:12px;">일평균 증감</div>
+        <div style="font-size:28px; font-weight:700; color:{a_color}; letter-spacing:-1px; line-height:1;">{a_sign}{avg_change:,}</div>
+        <div style="font-size:10px; color:#333; margin-top:5px;">명 / 일</div>
+      </div>
+      <div style="background:#111; border:1px solid #1e1e1e; border-radius:12px; padding:20px 12px; text-align:center;">
+        <div style="font-size:9px; color:#444; letter-spacing:2px; text-transform:uppercase; margin-bottom:12px;">최대 증감일</div>
+        <div style="font-size:22px; font-weight:700; color:#ccc; letter-spacing:-1px; line-height:1;">{best_val}</div>
+        <div style="font-size:10px; color:#333; margin-top:5px;">{best_date}</div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── 팔로워 추이 차트 ──────────────────────────────────────────
     if len(df) >= 2:
+        st.markdown('<div style="font-size:9px; color:#444; letter-spacing:2px; text-transform:uppercase; margin-bottom:8px;">팔로워 추이</div>', unsafe_allow_html=True)
         line_chart = (
             alt.Chart(df)
             .mark_area(
@@ -187,81 +208,102 @@ def render_dashboard(snapshots: list[dict]) -> None:
                 color=alt.Gradient(
                     gradient="linear",
                     stops=[
-                        alt.GradientStop(color="rgba(225,48,108,0.3)", offset=0),
+                        alt.GradientStop(color="rgba(225,48,108,0.22)", offset=0),
                         alt.GradientStop(color="rgba(225,48,108,0)", offset=1),
                     ],
                     x1=1, x2=1, y1=1, y2=0,
                 ),
             )
             .encode(
-                x=alt.X("date:O", axis=alt.Axis(labelColor="#555", tickColor="#1a1a1a", domainColor="#1a1a1a", title=None)),
-                y=alt.Y("count:Q", axis=alt.Axis(labelColor="#555", gridColor="#1a1a1a", title=None), scale=alt.Scale(zero=False)),
-                tooltip=[alt.Tooltip("date:O", title="날짜"), alt.Tooltip("count:Q", title="팔로워", format=",")],
+                x=alt.X("date_label:O", axis=alt.Axis(
+                    labelColor="#666", tickColor="#222", domainColor="#222",
+                    title=None, labelFontSize=11, labelAngle=0,
+                )),
+                y=alt.Y("count:Q", axis=alt.Axis(
+                    labelColor="#666", gridColor="#222", title=None,
+                    labelFontSize=11, format=",",
+                ), scale=alt.Scale(zero=False)),
+                tooltip=[
+                    alt.Tooltip("date:O", title="날짜"),
+                    alt.Tooltip("count:Q", title="팔로워", format=","),
+                    alt.Tooltip("net_change:Q", title="순증감", format="+,"),
+                ],
             )
-            .properties(height=160)
-            .configure_view(strokeWidth=0, fill="#0d0d0d")
-            .configure_axis(labelFontSize=10)
+            .properties(height=180)
+            .configure_view(strokeWidth=0, fill="#111")
+            .configure_axis(labelFontSize=11)
         )
         st.altair_chart(line_chart, use_container_width=True)
 
-    # 증감 바 차트
+    # ── 일별 순증감 바 차트 ───────────────────────────────────────
     bar_df = df[df["net_change"].notna()].copy()
     if len(bar_df) >= 1:
-        has_detail = bar_df["new_count"].notna().any()
-        if has_detail:
-            melt_rows = []
-            for _, row in bar_df.iterrows():
-                if row["new_count"] is not None:
-                    melt_rows.append({"date_label": row["date_label"], "value": row["new_count"], "type": "신규"})
-                    melt_rows.append({"date_label": row["date_label"], "value": -row["lost_count"], "type": "이탈"})
-            if melt_rows:
-                melt_df = pd.DataFrame(melt_rows)
-                bar_chart = (
-                    alt.Chart(melt_df)
-                    .mark_bar(cornerRadiusTopLeft=2, cornerRadiusTopRight=2)
-                    .encode(
-                        x=alt.X("date_label:O", axis=alt.Axis(labelColor="#555", tickColor="#1a1a1a", domainColor="#1a1a1a", title=None)),
-                        y=alt.Y("value:Q", axis=alt.Axis(labelColor="#555", gridColor="#1a1a1a", title=None)),
-                        color=alt.Color("type:N", scale=alt.Scale(domain=["신규", "이탈"], range=["#2ecc71", "#e74c3c"]), legend=alt.Legend(labelColor="#888", titleColor="#555")),
-                        tooltip=[alt.Tooltip("date_label:O", title="날짜"), alt.Tooltip("type:N", title="구분"), alt.Tooltip("value:Q", title="수", format="+,")],
-                    )
-                    .properties(height=140)
-                    .configure_view(strokeWidth=0, fill="#0d0d0d")
-                    .configure_axis(labelFontSize=10)
-                )
-                st.altair_chart(bar_chart, use_container_width=True)
-        else:
-            bar_df = bar_df.copy()
-            bar_df["color"] = bar_df["net_change"].apply(lambda x: "#2ecc71" if x >= 0 else "#e74c3c")
-            bar_chart = (
-                alt.Chart(bar_df)
-                .mark_bar(cornerRadiusTopLeft=2, cornerRadiusTopRight=2)
-                .encode(
-                    x=alt.X("date_label:O", axis=alt.Axis(labelColor="#555", tickColor="#1a1a1a", domainColor="#1a1a1a", title=None)),
-                    y=alt.Y("net_change:Q", axis=alt.Axis(labelColor="#555", gridColor="#1a1a1a", title=None)),
-                    color=alt.Color("color:N", scale=None, legend=None),
-                    tooltip=[alt.Tooltip("date_label:O", title="날짜"), alt.Tooltip("net_change:Q", title="순증감", format="+,")],
-                )
-                .properties(height=140)
-                .configure_view(strokeWidth=0, fill="#0d0d0d")
-                .configure_axis(labelFontSize=10)
+        st.markdown('<div style="font-size:9px; color:#444; letter-spacing:2px; text-transform:uppercase; margin:20px 0 8px;">일별 순증감</div>', unsafe_allow_html=True)
+        bar_df["bar_color"] = bar_df["net_change"].apply(lambda x: "#2ecc71" if x >= 0 else "#e74c3c")
+        bar_chart = (
+            alt.Chart(bar_df)
+            .mark_bar(cornerRadiusTopLeft=3, cornerRadiusTopRight=3,
+                      cornerRadiusBottomLeft=3, cornerRadiusBottomRight=3)
+            .encode(
+                x=alt.X("date_label:O", axis=alt.Axis(
+                    labelColor="#666", tickColor="#222", domainColor="#222",
+                    title=None, labelFontSize=11, labelAngle=0,
+                )),
+                y=alt.Y("net_change:Q", axis=alt.Axis(
+                    labelColor="#666", gridColor="#222", title=None,
+                    labelFontSize=11,
+                ), scale=alt.Scale(zero=True)),
+                color=alt.Color("bar_color:N", scale=None, legend=None),
+                tooltip=[
+                    alt.Tooltip("date_label:O", title="날짜"),
+                    alt.Tooltip("net_change:Q", title="순증감", format="+,"),
+                ],
             )
-            st.altair_chart(bar_chart, use_container_width=True)
+            .properties(height=160)
+            .configure_view(strokeWidth=0, fill="#111")
+            .configure_axis(labelFontSize=11)
+        )
+        st.altair_chart(bar_chart, use_container_width=True)
 
-    # 데이터 테이블
-    table_data = []
-    for row in reversed(data):
+    # ── 데이터 테이블 (커스텀 HTML) ───────────────────────────────
+    rows_html = ""
+    for i, row in enumerate(reversed(data)):
         nc = row["net_change"]
         new_c = row["new_count"]
         lost_c = row["lost_count"]
-        table_data.append({
-            "날짜": row["date"][5:],
-            "팔로워": f"{row['count']:,}",
-            "신규": f"+{int(new_c):,}" if new_c is not None else "—",
-            "이탈": f"-{int(lost_c):,}" if lost_c is not None else "—",
-            "순증감": f"{'+' if nc >= 0 else ''}{int(nc):,}" if nc is not None else "—",
-        })
-    st.dataframe(pd.DataFrame(table_data), use_container_width=True, hide_index=True)
+        nc_str = (f"+{int(nc):,}" if nc >= 0 else f"{int(nc):,}") if nc is not None else "—"
+        nc_color = "#2ecc71" if (nc is not None and nc > 0) else "#e74c3c" if (nc is not None and nc < 0) else "#555"
+        new_str = f"+{int(new_c):,}" if new_c is not None else "—"
+        lost_str = f"-{int(lost_c):,}" if lost_c is not None else "—"
+        bg = "#111" if i % 2 == 0 else "#0e0e0e"
+        rows_html += f"""
+        <tr style="background:{bg};">
+          <td style="padding:11px 16px; color:#777; font-size:12px;">{row['date'][5:]}</td>
+          <td style="padding:11px 16px; color:#bbb; font-size:12px; text-align:right;">{row['count']:,}</td>
+          <td style="padding:11px 16px; color:#2ecc71; font-size:12px; text-align:right;">{new_str}</td>
+          <td style="padding:11px 16px; color:#e74c3c; font-size:12px; text-align:right;">{lost_str}</td>
+          <td style="padding:11px 16px; color:{nc_color}; font-size:13px; font-weight:700; text-align:right;">{nc_str}</td>
+        </tr>"""
+
+    st.markdown(f"""
+    <div style="margin-top:24px; margin-bottom:48px;">
+      <div style="font-size:9px; color:#444; letter-spacing:2px; text-transform:uppercase; margin-bottom:10px;">데이터</div>
+      <div style="border-radius:12px; overflow:hidden; border:1px solid #1e1e1e;">
+        <table style="width:100%; border-collapse:collapse;">
+          <thead>
+            <tr style="background:#0a0a0a; border-bottom:1px solid #1e1e1e;">
+              <th style="padding:10px 16px; color:#333; font-size:9px; letter-spacing:2px; text-transform:uppercase; text-align:left; font-weight:500;">날짜</th>
+              <th style="padding:10px 16px; color:#333; font-size:9px; letter-spacing:2px; text-transform:uppercase; text-align:right; font-weight:500;">팔로워</th>
+              <th style="padding:10px 16px; color:#2ecc71; font-size:9px; letter-spacing:2px; text-transform:uppercase; text-align:right; font-weight:500;">신규</th>
+              <th style="padding:10px 16px; color:#e74c3c; font-size:9px; letter-spacing:2px; text-transform:uppercase; text-align:right; font-weight:500;">이탈</th>
+              <th style="padding:10px 16px; color:#555; font-size:9px; letter-spacing:2px; text-transform:uppercase; text-align:right; font-weight:500;">순증감</th>
+            </tr>
+          </thead>
+          <tbody>{rows_html}</tbody>
+        </table>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
 
 
 def render_live_counter(
