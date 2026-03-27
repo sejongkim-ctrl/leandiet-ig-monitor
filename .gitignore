@@ -1,5 +1,4 @@
 assets/.env
-assets/data/
 assets/sessions/
 assets/token_cache.json
 assets/streamlit.log

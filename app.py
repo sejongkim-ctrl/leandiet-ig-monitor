@@ -15,6 +15,8 @@ from pathlib import Path
 
 import streamlit as st
 import streamlit.components.v1 as components
+import altair as alt
+import pandas as pd
 
 from ig_graph_api import fetch_profile, refresh_long_lived_token, load_env
 
@@ -92,6 +94,174 @@ def load_recent_snapshots(target: str, days: int = 7) -> list[dict]:
             snap = json.loads(path.read_text())
             result.append({"date": date_str[5:], "count": snap["follower_count"]})
     return result
+
+
+def load_all_snapshots(target: str, days: int = 90) -> list[dict]:
+    """전체 스냅샷 로드 + diff 데이터 파싱. 날짜순 정렬."""
+    files = sorted(DATA_DIR.glob(f"{target}_*.json"))
+    result = []
+    for f in files:
+        try:
+            snap = json.loads(f.read_text())
+            date_str = snap.get("date", f.stem.split("_")[-1])
+            count = snap.get("follower_count", 0)
+            diff = snap.get("diff", {})
+            result.append({
+                "date": date_str,
+                "count": count,
+                "new_count": diff.get("new_count"),
+                "lost_count": diff.get("lost_count"),
+                "net_change": diff.get("net_change"),
+                "change_pct": diff.get("change_pct"),
+            })
+        except Exception:
+            continue
+
+    result.sort(key=lambda x: x["date"])
+
+    # diff 없는 구간은 count 차로 net_change 계산
+    for i in range(1, len(result)):
+        if result[i]["net_change"] is None:
+            result[i]["net_change"] = result[i]["count"] - result[i - 1]["count"]
+
+    if days and len(result) > days:
+        result = result[-days:]
+
+    return result
+
+
+def render_dashboard(snapshots: list[dict]) -> None:
+    """일별 팔로워 증감 대시보드 섹션."""
+    if len(snapshots) < 2:
+        st.markdown("""
+        <div style="text-align:center; color:#444; font-size:13px; padding:40px 0; letter-spacing:1px;">
+            데이터가 쌓이면 추이 차트가 표시됩니다<br>
+            <span style="font-size:11px; color:#333;">내일부터 일별 증감을 확인할 수 있습니다</span>
+        </div>
+        """, unsafe_allow_html=True)
+        return
+
+    st.markdown("""
+    <div style="border-top: 1px solid #1a1a1a; margin: 20px 0 24px; padding-top: 24px;
+                text-align:center; font-size:10px; color:#333; letter-spacing:3px; text-transform:uppercase;">
+        일별 팔로워 증감
+    </div>
+    """, unsafe_allow_html=True)
+
+    # 기간 선택
+    period_options = ["7일", "14일", "30일", "전체"]
+    period_map = {"7일": 7, "14일": 14, "30일": 30, "전체": len(snapshots)}
+    default_period = "전체" if len(snapshots) < 8 else "7일"
+    selected = st.segmented_control(
+        "기간", period_options, default=default_period, label_visibility="collapsed"
+    )
+    n = period_map.get(selected, len(snapshots))
+    data = snapshots[-n:] if n < len(snapshots) else snapshots
+
+    df = pd.DataFrame(data)
+    df["date_label"] = df["date"].str[5:]
+
+    # 요약 메트릭
+    valid_changes = [r["net_change"] for r in data if r["net_change"] is not None]
+    total_change = sum(valid_changes) if valid_changes else 0
+    avg_change = round(total_change / len(valid_changes), 1) if valid_changes else 0
+    best_day = max(data, key=lambda x: x["net_change"] if x["net_change"] is not None else float("-inf"))
+    best_label = f"{best_day['date'][5:]}  +{best_day['net_change']:,}" if best_day.get("net_change") else "—"
+
+    col1, col2, col3 = st.columns(3)
+    sign = "+" if total_change >= 0 else ""
+    with col1:
+        st.metric("기간 총 증감", f"{sign}{total_change:,}명")
+    with col2:
+        sign2 = "+" if avg_change >= 0 else ""
+        st.metric("일평균 증감", f"{sign2}{avg_change:,}명")
+    with col3:
+        st.metric("최대 증감일", best_label)
+
+    # 추이 라인+영역 차트
+    if len(df) >= 2:
+        line_chart = (
+            alt.Chart(df)
+            .mark_area(
+                line={"color": "#E1306C", "strokeWidth": 2},
+                color=alt.Gradient(
+                    gradient="linear",
+                    stops=[
+                        alt.GradientStop(color="rgba(225,48,108,0.3)", offset=0),
+                        alt.GradientStop(color="rgba(225,48,108,0)", offset=1),
+                    ],
+                    x1=1, x2=1, y1=1, y2=0,
+                ),
+            )
+            .encode(
+                x=alt.X("date:O", axis=alt.Axis(labelColor="#555", tickColor="#1a1a1a", domainColor="#1a1a1a", title=None)),
+                y=alt.Y("count:Q", axis=alt.Axis(labelColor="#555", gridColor="#1a1a1a", title=None), scale=alt.Scale(zero=False)),
+                tooltip=[alt.Tooltip("date:O", title="날짜"), alt.Tooltip("count:Q", title="팔로워", format=",")],
+            )
+            .properties(height=160)
+            .configure_view(strokeWidth=0, fill="#0d0d0d")
+            .configure_axis(labelFontSize=10)
+        )
+        st.altair_chart(line_chart, use_container_width=True)
+
+    # 증감 바 차트
+    bar_df = df[df["net_change"].notna()].copy()
+    if len(bar_df) >= 1:
+        has_detail = bar_df["new_count"].notna().any()
+        if has_detail:
+            melt_rows = []
+            for _, row in bar_df.iterrows():
+                if row["new_count"] is not None:
+                    melt_rows.append({"date_label": row["date_label"], "value": row["new_count"], "type": "신규"})
+                    melt_rows.append({"date_label": row["date_label"], "value": -row["lost_count"], "type": "이탈"})
+            if melt_rows:
+                melt_df = pd.DataFrame(melt_rows)
+                bar_chart = (
+                    alt.Chart(melt_df)
+                    .mark_bar(cornerRadiusTopLeft=2, cornerRadiusTopRight=2)
+                    .encode(
+                        x=alt.X("date_label:O", axis=alt.Axis(labelColor="#555", tickColor="#1a1a1a", domainColor="#1a1a1a", title=None)),
+                        y=alt.Y("value:Q", axis=alt.Axis(labelColor="#555", gridColor="#1a1a1a", title=None)),
+                        color=alt.Color("type:N", scale=alt.Scale(domain=["신규", "이탈"], range=["#2ecc71", "#e74c3c"]), legend=alt.Legend(labelColor="#888", titleColor="#555")),
+                        tooltip=[alt.Tooltip("date_label:O", title="날짜"), alt.Tooltip("type:N", title="구분"), alt.Tooltip("value:Q", title="수", format="+,")],
+                    )
+                    .properties(height=140)
+                    .configure_view(strokeWidth=0, fill="#0d0d0d")
+                    .configure_axis(labelFontSize=10)
+                )
+                st.altair_chart(bar_chart, use_container_width=True)
+        else:
+            bar_df = bar_df.copy()
+            bar_df["color"] = bar_df["net_change"].apply(lambda x: "#2ecc71" if x >= 0 else "#e74c3c")
+            bar_chart = (
+                alt.Chart(bar_df)
+                .mark_bar(cornerRadiusTopLeft=2, cornerRadiusTopRight=2)
+                .encode(
+                    x=alt.X("date_label:O", axis=alt.Axis(labelColor="#555", tickColor="#1a1a1a", domainColor="#1a1a1a", title=None)),
+                    y=alt.Y("net_change:Q", axis=alt.Axis(labelColor="#555", gridColor="#1a1a1a", title=None)),
+                    color=alt.Color("color:N", scale=None, legend=None),
+                    tooltip=[alt.Tooltip("date_label:O", title="날짜"), alt.Tooltip("net_change:Q", title="순증감", format="+,")],
+                )
+                .properties(height=140)
+                .configure_view(strokeWidth=0, fill="#0d0d0d")
+                .configure_axis(labelFontSize=10)
+            )
+            st.altair_chart(bar_chart, use_container_width=True)
+
+    # 데이터 테이블
+    table_data = []
+    for row in reversed(data):
+        nc = row["net_change"]
+        new_c = row["new_count"]
+        lost_c = row["lost_count"]
+        table_data.append({
+            "날짜": row["date"][5:],
+            "팔로워": f"{row['count']:,}",
+            "신규": f"+{int(new_c):,}" if new_c is not None else "—",
+            "이탈": f"-{int(lost_c):,}" if lost_c is not None else "—",
+            "순증감": f"{'+' if nc >= 0 else ''}{int(nc):,}" if nc is not None else "—",
+        })
+    st.dataframe(pd.DataFrame(table_data), use_container_width=True, hide_index=True)
 
 
 def render_live_counter(
@@ -388,8 +558,15 @@ def main():
     .stApp { background: #0d0d0d !important; }
     header[data-testid="stHeader"] { display: none !important; }
     footer { display: none !important; }
-    .block-container { padding-top: 0 !important; padding-bottom: 0 !important; max-width: 600px !important; }
+    .block-container { padding-top: 0 !important; padding-bottom: 0 !important; max-width: 720px !important; }
     div[data-testid="stSpinner"] { color: #E1306C; }
+    div[data-testid="stMetric"] { background: #111 !important; border-radius: 8px; padding: 12px 16px !important; }
+    div[data-testid="stMetricValue"] { color: #fff !important; font-size: 18px !important; }
+    div[data-testid="stMetricLabel"] { color: #555 !important; font-size: 11px !important; letter-spacing: 1px; }
+    div[data-testid="stDataFrame"] { background: #111 !important; }
+    div[data-testid="stSegmentedControl"] button { background: #111 !important; color: #555 !important; border: 1px solid #1a1a1a !important; }
+    div[data-testid="stSegmentedControl"] button[aria-checked="true"] { background: #222 !important; color: #fff !important; }
+    canvas { background: #0d0d0d !important; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -451,6 +628,9 @@ def main():
     trend = load_recent_snapshots(target_username, days=7)
 
     render_live_counter(profile, yesterday_count, trend, refresh_interval)
+
+    snapshots = load_all_snapshots(target_username, days=90)
+    render_dashboard(snapshots)
 
 
 if __name__ == "__main__":
